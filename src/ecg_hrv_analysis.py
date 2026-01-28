@@ -295,7 +295,9 @@ class ECGAnalyzer:
         :param analysisIntervals_secT: Liste von Tupeln, die Start- und Endzeiten für
             die zu analysierenden Intervalle (in Sekunden) definieren.
         :type analysisIntervals_secT: list[tuple[float, float]]
-        :return: None
+        :return: Ein Dictionary mit den Analyseergebnissen, Metadaten und dem Rohsignal.
+                 Gibt None zurück, wenn das Signal nicht geladen werden konnte.
+        :rtype: dict | None
         """
         logger.info(f"Starte Analyse: {file_path}")
 
@@ -306,6 +308,18 @@ class ECGAnalyzer:
         logger.info(f"Signal ist {len(rawSignal_mvA)} Samples lang.")
         totalSignalDuration_sec = len(rawSignal_mvA) / self.samplingRate_hz
 
+        # Ergebnisstruktur initialisieren
+        results = {
+            'metadata': {
+                'source_file': os.path.basename(file_path),
+                'source_file_path': file_path,
+                'total_signal_duration_sec': totalSignalDuration_sec,
+                'sampling_rate_hz': self.samplingRate_hz,
+            },
+            'intervals': [],
+            'summary': None
+        }
+
         metrics_dictA = []
 
         print(f"\n{'=' * 60}")
@@ -315,9 +329,20 @@ class ECGAnalyzer:
         for idx, (start_sec, end_sec) in enumerate(analysisIntervals_secT):
             print(f"\n--- Intervall {idx + 1}: {start_sec}s - {end_sec}s ---")
 
+            interval_result = {
+                'interval_index': idx + 1,
+                'start_sec': start_sec,
+                'end_sec': end_sec,
+                'status': 'skipped',
+                'metrics': None,
+                'r_peaks_indices': None,
+                'nn_intervals_ms': None
+            }
+
             # Validierung der Intervallgrenzen
             if start_sec < 0 or end_sec > totalSignalDuration_sec or start_sec >= end_sec:
                 logger.warning(f"Ungültiges Intervall [{start_sec}, {end_sec}]. Abbruch.")
+                interval_result['status'] = 'invalid_bounds'
                 continue
 
             # Slicing auf dem RAW Signal
@@ -332,6 +357,8 @@ class ECGAnalyzer:
             # Check, ob beim Preprocessing was schief ging (z.B leeres Array zurück)
             if intervalSignal_mvA is None or len(intervalSignal_mvA) == 0:
                 logger.warning("Preprocessing hat leeres Signal geliefert. Abbruch.")
+                interval_result['status'] = 'preprocessing_failed'
+                results['intervals'].append(interval_result)
                 continue
 
             # 5. Detektion auf dem bereinigten Slice
@@ -339,6 +366,8 @@ class ECGAnalyzer:
 
             if len(rPeaksInInterval_idxA) < 2:
                 logger.warning("Zu wenige Peaks in diesem Intervall. Abbruch.")
+                interval_result['status'] = 'too_few_peaks'
+                results['intervals'].append(interval_result)
                 continue
 
             # Umrechnung von Indizes zu Zeit (Sekunden) - relativ zum Intervall-Start
@@ -351,15 +380,31 @@ class ECGAnalyzer:
 
             if metrics_dict:
                 metrics_dictA.append(metrics_dict)
+                interval_result['status'] = 'success'
+                interval_result['metrics'] = metrics_dict
+                interval_result['r_peaks_indices'] = rPeaksInInterval_idxA.tolist()
+                interval_result['nn_intervals_ms'] = nnTimeIntervals_msA.tolist()
+
                 sdann_str = f"{metrics_dict['SDANN']:.2f} ms" if not np.isnan(metrics_dict['SDANN']) else "N/A"
                 print(f"  HR: {metrics_dict['HR_Mean']:.1f} bpm (Min/Max: {metrics_dict['HR_Min']:.0f}/{metrics_dict['HR_Max']:.0f})")
                 print(f"  SDNN: {metrics_dict['SDNN']:.2f} ms | NN50: {metrics_dict['NN50']} | SDANN: {sdann_str}")
 
+            results['intervals'].append(interval_result)
         # Statistik über Intervalle (Requirement: > 7 Intervalle)
         if len(metrics_dictA) > 7:
             print(f"\n{'-' * 60}\nZUSAMMENFASSUNG (> 7 Intervalle)\n{'-' * 60}")
             hr_means = [r['HR_Mean'] for r in metrics_dictA]
             sdnns = [r['SDNN'] for r in metrics_dictA]
+
+            summary = {
+                'hr_mean_avg': np.mean(hr_means),
+                'hr_mean_std': np.std(hr_means, ddof=1),
+                'sdnn_avg': np.mean(sdnns),
+                'sdnn_std': np.std(sdnns, ddof=1),
+                'valid_interval_count': len(metrics_dictA)
+            }
+            results['summary'] = summary
+
             print(f"HR Mean:   {np.mean(hr_means):.2f} ± {np.std(hr_means, ddof=1):.2f} bpm")
             print(f"SDNN Mean: {np.mean(sdnns):.2f} ± {np.std(sdnns, ddof=1):.2f} ms")
-
+        return results
