@@ -62,6 +62,7 @@ class ECGAnalyzer:
 
             self.outlierLowCut_perc = get_fl('Preprocessing', 'outlierLowCut_perc')
             self.outlierHighCut_perc = get_fl('Preprocessing', 'outlierHighCut_perc')
+            self.medianWindowSize_sec = get_fl('Preprocessing', 'medianWindowSize_sec')
 
         except Exception as e:
             logger.error(f"Fehler beim Parsen der Config: {e}")
@@ -122,6 +123,47 @@ class ECGAnalyzer:
         logger.debug(f"Outlier Intervall ist [{lowestValue_mv:.2f}, {highestValue_mv:.2f}]")
         # Signale werden geclipped, daher alles was kleiner als lower oder mehr als upper ist, wird auf diese Werte reduziert.
         return np.clip(signal_mvA, lowestValue_mv, highestValue_mv)
+
+    def removeBaselineDriftByMedian(self, signal_mvA, samplingRate_hz, window_sec=0.6):
+        """
+        Entfernt Baseline-Drift aus einem EKG-Signal mittels gleitendem Median.
+
+        Der Median ist robuster gegenüber Ausreißern (wie R-Zacken) als der Mittelwert.
+
+        :param signal_mvA: Das EKG-Signal als numpy Array.
+        :type signal_mvA: numpy.ndarray
+        :param sampling_rate_hz: Die Abtastrate des Signals in Hz.
+        :type sampling_rate_hz: float
+        :param window_sec: Die Fenstergröße in Sekunden.
+        :type window_sec: float
+        :return: Das korrigierte Signal.
+        :rtype: numpy.ndarray
+        """
+        if signal_mvA is None or len(signal_mvA) == 0:
+            return signal_mvA
+
+        windowSize_samples = int(window_sec * samplingRate_hz)
+
+        if windowSize_samples < 1:
+            logger.warning("Fenstergröße muss mindestens 1 sein.")
+            return signal_mvA
+
+        n = len(signal_mvA)
+        half_window = windowSize_samples // 2
+
+        # Baseline durch gleitenden Median berechnen
+        baseline_mvA = np.zeros(n)
+
+        for i in range(n):
+            start = max(0, i - half_window)
+            end = min(n, i + half_window + 1)
+            baseline_mvA[i] = np.median(signal_mvA[start:end])
+
+        # Baseline subtrahieren
+        correctedSignal_mvA = signal_mvA - baseline_mvA
+
+        logger.debug(f"Baseline-Drift (Median) entfernt mit Fenstergröße {windowSize_samples} Samples.")
+        return correctedSignal_mvA
 
     def detectPeaksFromSignal(self, signal_mvA):
         """
@@ -308,6 +350,9 @@ class ECGAnalyzer:
         logger.info(f"Signal ist {len(rawSignal_mvA)} Samples lang.")
         totalSignalDuration_sec = len(rawSignal_mvA) / self.samplingRate_hz
 
+        # Baseline Drift subtrahieren - langsam!
+        # rawSignal_mvA = self.removeBaselineDriftByMedian(rawSignal_mvA, self.samplingRate_hz)
+
         # Ergebnisstruktur initialisieren
         results = {
             'metadata': {
@@ -351,8 +396,11 @@ class ECGAnalyzer:
 
             rawSignalInterval_mvA = rawSignal_mvA[start_idx:end_idx]
 
+            cleanedSignalInterval_mvA = self.removeBaselineDriftByMedian(rawSignalInterval_mvA, self.samplingRate_hz, self.medianWindowSize_sec)
+
+
             # Lokales Preprocessing, daher nur dieses spezifische Stück wird bereinigt.
-            intervalSignal_mvA = self.clipOutliersFromSignal(rawSignalInterval_mvA)
+            intervalSignal_mvA = self.clipOutliersFromSignal(cleanedSignalInterval_mvA)
 
             # Check, ob beim Preprocessing was schief ging (z.B leeres Array zurück)
             if intervalSignal_mvA is None or len(intervalSignal_mvA) == 0:
