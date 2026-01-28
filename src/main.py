@@ -4,6 +4,7 @@ import numpy as np
 import json
 
 from ecg_hrv_analysis import ECGAnalyzer
+from ecg_visualizer import plot_interval_results, plot_ecg_overview
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -30,6 +31,22 @@ if __name__ == "__main__":
             print("\n\n--- Strukturierte Ausgabe (JSON) ---")
             print(results)
 
+            signal = analyzer.loadEcgSignalFromMatFile('../samples/ecg1.mat')
+
+            # Alle erfolgreichen Intervalle visualisieren
+            saved_paths = plot_interval_results(
+                results,
+                signal,
+                analyzer.samplingRate_hz,
+                output_dir='./plots'
+            )
+
+            plot_ecg_overview(
+                signal,
+                analyzer.samplingRate_hz,
+                output_path='./plots/ecg_overview.png',
+                title='EKG Signal Übersicht'
+            )
 
     except Exception as e:
         logging.critical(f"System Failure: {e}")
