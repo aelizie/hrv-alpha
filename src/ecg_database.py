@@ -150,6 +150,10 @@ class ECGDatabase:
             if sdann is not None and (sdann != sdann):  # NaN check
                 sdann = None
 
+            nn50 = int(metrics.get('NN50'))
+            if nn50 is not None and (nn50 != nn50):
+                nn50 = None
+
             cursor.execute('''
                 INSERT INTO analysis_results (
                     timestamp, source_file, source_file_path,
@@ -169,7 +173,7 @@ class ECGDatabase:
                 metrics.get('HR_Max'),
                 metrics.get('SDNN'),
                 sdann,
-                metrics.get('NN50'),
+                nn50,
                 config_hash
             ))
             saved_count += 1
